@@ -3,13 +3,11 @@
 //
 
 #include "MetaDataDB.h"
-#include <fstream>
 #include <iostream>
-#include <regex>
 
 using namespace std;
 
-MetaDataDB::MetaDataDB(string path, int key_bits, int value_bits, int capacity, int size, double load_factor, double growth_factor, string shape)  : path(path), key_bits(key_bits), value_bits(value_bits), capacity(capacity), size_(size), load_factor(load_factor), growth_factor(growth_factor), shape(shape) {}
+MetaDataDB::MetaDataDB(string path, int key_bits, int value_bits, int capacity, int size, double load_factor, double growth_factor, string shape, std::string taxonomy)  : path(path), key_bits(key_bits), value_bits(value_bits), capacity(capacity), size_(size), load_factor(load_factor), growth_factor(growth_factor), shape(shape), taxonomy(taxonomy) {}
 
 MetaDataDB loadMetaDataDB(const string& path) {
     const string delimiter = "=";
@@ -17,11 +15,16 @@ MetaDataDB loadMetaDataDB(const string& path) {
     
     int key_bits, value_bits, capacity, size;
     double load_factor,growth_factor;
-    string shape;
+    string shape, taxonomy;
     
     // read meta file_
     ifstream metain;
-    metain.open(path + "/meta.txt");
+    metain.open(path + "/index.meta");
+    
+    if (!metain) {
+        cerr << "Given database folder \"" << path << "\" has no file called index.meta" << endl;
+        exit(0);
+    }
     if (metain.is_open()) {
         while (getline (metain, line)) {
             if (line.substr(0,8) == "key_bits") {
@@ -34,11 +37,11 @@ MetaDataDB loadMetaDataDB(const string& path) {
             }
             else if (line.substr(0,8) == "capacity") {
                 string token = line.substr(line.find(delimiter) + delimiter.length(), line.length());
-                capacity = stoi(token);
+                capacity = stoll(token);
             }
             else if (line.substr(0,4) == "size") {
                 string token = line.substr(line.find(delimiter) + delimiter.length(), line.length());
-                size = stoi(token);
+                size = stoll(token);
             }
             else if (line.substr(0,11) == "load_factor") {
                 string token = line.substr(line.find(delimiter) + delimiter.length(), line.length());
@@ -48,9 +51,13 @@ MetaDataDB loadMetaDataDB(const string& path) {
                 string token = line.substr(line.find(delimiter) + delimiter.length(), line.length());
                 growth_factor = stod(token);
             }
+            else if (line.substr(0,8) == "taxonomy") {
+                string token = line.substr(line.find(delimiter) + delimiter.length(), line.length());
+                taxonomy = token;
+            }
         }
     }
     metain.close();
     
-    return MetaDataDB(path, key_bits, value_bits, capacity, size, load_factor, growth_factor, shape);
+    return MetaDataDB(path, key_bits, value_bits, capacity, size, load_factor, growth_factor, shape, taxonomy);
 }

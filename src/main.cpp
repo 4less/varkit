@@ -6,6 +6,7 @@
 #include "OptionsContainer.h"
 #include <filesystem>
 #include "iotest.h"
+#include "test2.h"
 #include "Taxonomy.h"
 
 #define TEST 0
@@ -18,39 +19,56 @@ template class BHashMap<44,20,CustomHash>;
 std::vector<pair<string,string>> modes;
 
 const static string build_mode = "build";
+const static string taxonomy_mode = "taxonomy";
 const static string db_stats_mode = "db-stats";
+const static string query_db_mode = "query-db";
 const static string classify_mode = "classify";
 const static string new_shape_mode = "new-shape";
+const static string train_shape_mode = "train-shape";
+const static string test_mode = "test-mode";
+const static string help_mode = "help";
 
 cxxopts::Options build_options("varkit build", "Varkit is a program for classifying metagenomic reads, identify strains by using unknown variants and link and track these unknown strains accross samples.");
-cxxopts::Options db_stats_options("varkit db_stats", "Coming soon..");
+cxxopts::Options taxonomy_options("varkit taxonomy", "Create a taxonomy subset for set of taxa (NCBI).");
+cxxopts::Options query_db_options("varkit query-db", "Coming soon..");
+cxxopts::Options db_stats_options("varkit db-stats", "Coming soon..");
 cxxopts::Options classify_options("varkit classify", "Coming soon..");
-cxxopts::Options new_shape_options("varkit new_shape", "Coming soon..");
-
+cxxopts::Options new_shape_options("varkit new-shape", "Coming soon..");
+cxxopts::Options train_shape_options("varkit train-shape", "Coming soon..");
 
 void initModes() {
     modes.push_back({
-        "build",
+        build_mode,
         "Build your custom database to then use for classifying reads. If you do not want to use one of the shapes provided, you might want to look at mode <new-shape> and <train-shape> before. Type varkit new-shape or varkit train-shape to display the help for these modes."
     });
     
     modes.push_back({
-        "db-stats",
+        taxonomy_mode,
+        "Build your custom database to then use for classifying reads. If you do not want to use one of the shapes provided, you might want to look at mode <new-shape> and <train-shape> before. Type varkit new-shape or varkit train-shape to display the help for these modes."
+    });
+    
+    modes.push_back({
+        db_stats_mode,
         "Get stats on a database that has either been built using the mode <build> or built using the supplied script for the varkit default database."
     });
     
     modes.push_back({
-        "classify",
+         query_db_mode,
+         "Get stats on a database that has either been built using the mode <build> or built using the supplied script for the varkit default database."
+    });
+    
+    modes.push_back({
+        classify_mode,
         "Classify unknown reads and extract the variants by using an existing database."
     });
     
     modes.push_back({
-        "new-shape",
+        new_shape_mode,
         "Chose this mode if you want to use a custom shape."
     });
     
     modes.push_back({
-        "train-shape",
+        train_shape_mode,
         "Chose this mode if you have created a custom shape with <new-shape> and now want to train the pattern to variant map."
     });
     
@@ -63,10 +81,27 @@ void initModes() {
 void initBuildOptions() {
     build_options.add_options()
             //("o,output", "output folder (must be empty). If it does not exist, it will be created.", cxxopts::value<std::string>())
-            ("c,capacity", "Initial db capacity (to avoid many resizes)", cxxopts::value<int>())
+            ("c,capacity", "Initial db capacity (to avoid many resizes)", cxxopts::value<std::string>())
+            ("t,taxonomy", "Set the taxonomy. Options are NCBI and GTDB. The taxonomy must be available in the database, a.k.a it must have been build with the taxonomy mode and the specific options.", cxxopts::value<std::string>())
             ("d,db", "Folder to database. Must contain shape information in folder shape (can be created with mode <new_shape> or downloaded)", cxxopts::value<std::string>())
+            ("s,threads", "How many threads to use.", cxxopts::value<int>())
+            ("v,validate", "Validate DB afterwards by extracting the k-mers again and checking if they are in the build index.")
             ("h,help", "Display help.")
             ("fasta", "reference files", cxxopts::value<std::vector<std::string>>());
+}
+
+void initTaxonomyOptions() {
+    taxonomy_options.add_options()
+            ("o,output", "output folder for subsetted files 'nodes.dmp' and 'names.dmp'", cxxopts::value<std::string>())
+            ("t,taxa", "Specify taxa to build the tree.", cxxopts::value<std::string>())
+            ("n,nodes", "Folder to ncbi nodes file", cxxopts::value<std::string>())
+            ("m,names", "Folder to ncbi names file.", cxxopts::value<std::string>())
+            ("h,help", "Display help.");
+}
+
+void initQueryDBOptions() {
+    query_db_options.add_options()
+            ("d,db", "Folder to database. Must contain shape information in folder shape (can be created with mode <new_shape> or downloaded)", cxxopts::value<std::string>());
 }
 
 void initClassifyOptions() {
@@ -77,7 +112,9 @@ void initClassifyOptions() {
             .add_options()
             ("o,output", "output folder (must be empty). If it does not exist, it will be created.", cxxopts::value<std::string>())
             ("d,db", "Specify path to database (folder)",cxxopts::value<std::string>())
+            ("t,threads", "Number of threads to use. (Multithreading based on OpenMP library)", cxxopts::value<int>())
             ("n,no_variants", "If specified, varkit does not identify variants.")
+            ("l,vmer_length", "Length of variant mers with variant position in the middle.", cxxopts::value<size_t>())
             ("h,help", "Display help.")
             ("reads", "", cxxopts::value<std::vector<std::string>>());
 }
@@ -85,6 +122,8 @@ void initClassifyOptions() {
 void initOptions() {
     initBuildOptions();
     initClassifyOptions();
+    initTaxonomyOptions();
+    initQueryDBOptions();
 }
 
 static bool stringComparator(pair<string,string> &i, pair<string,string> &j) {
@@ -128,6 +167,7 @@ static string breakString (string s, int line_length, int indent_by = 0, bool in
             }
         }
     }
+    return "";
 }
 
 static void printGeneralHelp(int min_dist, int max_cols) {
@@ -153,63 +193,25 @@ static void printGeneralHelp(int min_dist, int max_cols) {
     }
 }
 
+
+static const string formatDNAInput(string in) {
+    string out = "";
+    
+    for (int i = 0; i < in.length(); i++) {
+        char c = in.c_str()[i];
+        if (c == 'A' || c == 'C' || c == 'G' || c == 'T' || c == 'X')
+            out += c;
+    }
+    return out;
+}
+
 #if TEST == 1
-#include "test/test.h"
-#include "Benchmark.h"
-int main() {
-    /*cached_computation(4);
-    cached_computation(7);
-    cached_computation(7);
-    cached_computation(0);*/
+int main(int argc, char *argv[]) {
+    cout << "test start" << endl;
     
-    //threadTest();
+    test_kmer_buffer();
     
-    /*Benchmark bm("fasta_test");
-    cout << "start fastaTest" << endl;
-    bm.start();
-    fastaTest(1);
-    bm.stop();
-    bm.printResults();*/
-    
-    //iotest::compareFastaIO("/home/joachim/CLionProjects/varkit/data/test/ultra_test2.fa");
-    Benchmark bm("taxonomy");
-    bm.start();
-    //TaxonomyInterface* taxonomy = new NCBITaxonomy("/home/joachim/CLionProjects/varkit/data/taxonomy/nodes.dmp");
-    
-    NCBITaxonomy* taxonomy = new NCBITaxonomy("/home/joachim/CLionProjects/varkit/data/taxonomy/nodes.dmp");
-    taxonomy->subsetByTaxa("/home/joachim/CLionProjects/varkit/data/test/bacteriax.taxid");
-    taxonomy->saveCustomNodes("/home/joachim/CLionProjects/varkit/data/taxonomy/custom.dmp");
-    taxonomy->loadNames("/home/joachim/CLionProjects/varkit/data/taxonomy/names_wo.dmp");
-    taxonomy->saveCustomNames("/home/joachim/CLionProjects/varkit/data/taxonomy/custom_names.dmp");
-    
-    return 0;
-    //NCBITaxonomy* taxonomy = new NCBITaxonomy();
-    taxonomy->loadCustomNodes("/home/joachim/CLionProjects/varkit/data/taxonomy/custom.dmp");
-    cout << taxonomy->getNCBI(1) << endl;
-    
-    //taxonomy->loadNames("/home/joachim/CLionProjects/varkit/data/taxonomy/names_wo.dmp");
-    //cout << "subset names" << endl;
-    //taxonomy->subsetNames();
-    cout << "savecustom names" << endl;
-    //taxonomy->saveCustomNames("/home/joachim/CLionProjects/varkit/data/taxonomy/custom_names.dmp");
-    
-    taxonomy->loadCustomNames("/home/joachim/CLionProjects/varkit/data/taxonomy/custom_names.dmp");
-    taxonomy->print(taxonomy->getNode(1));
-    
-    cout << taxonomy->getCustom(1315283) << endl;
-    
-    return 0;
-    //neglect:
-    //vector<int> taxids = {85991, 810, 1444190, 813, 562};
-    //taxonomy->shrinkToSubtreesOf(taxids);
-    //
-    
-    taxonomy->loadCustomNodes("/home/joachim/CLionProjects/varkit/data/taxonomy/custom.dmp");
-    bm.stop();
-    bm.printResults();
-    int lca = taxonomy->lca(3514,3515);
-    cout << lca << endl;
-    cout << taxonomy->getNCBI(lca) << endl;
+    cout << "TEst end" << endl;
 }
 #else
 int main(int argc, char *argv[]) {
@@ -233,12 +235,16 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < argc_new; i++)
             argv_copy[i] = argv[i+1];
         
+        // BUILD MODE
         if (string(argv[1]) == build_mode) {
             
             build_options.parse_positional({"fasta"});
+            // DEFAULT TAXONOMY CHANGE THIS MECHANISM IN THE FUTURE
+            std::string taxonomy = "NCBI";
             
             auto result = build_options.parse(argc_new, argv_copy);
     
+            int threads = result.count("threads") ? result["threads"].as<int>() : 1;
             
             if (result.count("help")) {
                 cout << "BUILD MODE" << endl;
@@ -249,16 +255,59 @@ int main(int argc, char *argv[]) {
                 cout << "Please provide fasta files from which to build the db" << endl;
                 exit(0);
             }
+            if (result.count("taxonomy")) {
+                taxonomy = result["taxonomy"].as<std::string>();
+            }
             
             BuildOptionsContainer build_options_container(
-                    1, //result["threads"].as<int>(),
+                    threads,
                     result["db"].as<string>(),
-                    result["fasta"].as<vector<string>>(),
-                    result["capacity"].as<int>()
+                    result["fasta"].as<vector<std::string>>(),
+                    stoll(result["capacity"].as<std::string>()),
+                    taxonomy,
+                    result.count("validate")
                     );
             
             VarkitExecutor::runBuild(build_options_container);
             
+            cout << "done" << endl;
+            
+            // TAXONOMY MODE
+        } else if (string(argv[1]) == taxonomy_mode) {
+            auto result = taxonomy_options.parse(argc_new, argv_copy);
+            
+            if (result.count("help")) {
+                cout << "TAXONOMY MODE" << endl;
+                cout << taxonomy_options.help() << endl;
+                exit(0);
+            }
+            
+            string nodes = result["nodes"].as<string>();
+            string names = result["names"].as<string>();
+            string taxa = result["taxa"].as<string>();
+            string output = result["output"].as<string>();
+            
+            NCBITaxonomy taxonomy;
+            cout << "load nodes ..." << endl;
+            taxonomy.loadNodes(nodes);
+            
+            cout << "create subset ..." << endl;
+            taxonomy.subsetByTaxa(taxa);
+
+            
+            cout << "save custom nodes ..." << endl;
+            taxonomy.saveCustomNodes(output + "/nodes.dmp");
+            
+            cout << "load names ..." << endl;
+            taxonomy.loadNames(names);
+            
+            cout << "subset names ..." << endl;
+            taxonomy.subsetNames();
+        
+            cout << "save custom names ..." << endl;
+            taxonomy.saveCustomNames(output + "/names.dmp");
+            
+        
         } else if (string(argv[1]) == db_stats_mode) {
         
         } else if (string(argv[1]) == classify_mode) {
@@ -274,25 +323,212 @@ int main(int argc, char *argv[]) {
             if (!result.count("db")) {
                 cout << "You must specify a path to the database." << endl;
             }
+    
+            size_t vmer_length = 15;
+            if (!result.count("vmer_length")) {
+                vmer_length = result["vmer_length"].as<size_t>();
+            }
             
             MetaDataDB meta_db = loadMetaDataDB(result["db"].as<string>());
             
             ClassifyOptionsContainer classify_options_container(
                     meta_db,
-                    result["reads"].as<vector<string>>().at(0),
-                    result["threads"].as<int>()
+                    result["reads"].as<vector<string>>(),
+                    0,//result["threads"].as<int>(),
+                    result["output"].as<string>(),
+                    vmer_length
                     );
     
-            VarkitExecutor::runClassify(classify_options_container);
+            
+            VarkitExecutor::runClassifyOMP(classify_options_container);
     
     
         } else if (string(argv[1]) == new_shape_mode) {
         
+        } else if (string(argv[1]) == query_db_mode) {
+            cout << "QUERY DB MODE" << endl;
+            auto result = query_db_options.parse(argc_new, argv_copy);
+            
+            string db = result["db"].as<string>();
+            
+            cout << "metapath: " << db << endl;
+            MetaDataDB meta_db = loadMetaDataDB(db);
+    
+            // Shape information
+            cout << "shape_path: " << db + MetaDataDB::SHAPE_FILE << endl;
+            string shape_str = MetaDataDB::loadShape(db + MetaDataDB::SHAPE_FILE);
+            const size_t shape_length = shape_str.length();
+            bool * shape = MetaDataDB::getShape(shape_str);
+            cout << "shape: " << shape_str << endl;
+            cout << "shape_length: " << shape_str.length() << endl;
+            
+    
+            BHashMap<44, 20, CustomHash> map (meta_db.capacity, meta_db.load_factor, meta_db.growth_factor);
+            map.load(meta_db.path + "/index.db", meta_db.path + "/index.meta");
+            cout << "done loading." << endl;
+            
+            int k = 22;
+            const int key_bytes = (2*k + 8 - 1) /  8;
+            
+
+            SpacedKmerIterator iterator(k, shape, shape_length);
+    
+            static uint8_t *key = new uint8_t[key_bytes];
+            static uint8_t *value_cache = new uint8_t[8];
+            
+            string input;
+            cin >> input;
+            input = formatDNAInput(input);
+            FastxRecord record;
+            record.header = ">dummy";
+            
+            bool testfile = false;
+            cout << "input: " << input << endl;
+            while (input.compare("stop") != 0) {
+                if (input.compare("file") == 0) {
+                    testfile = true;
+                    break;
+                }
+                cout << "format: " << input << endl;
+                input = formatDNAInput(input);
+                cout << "query: " << input << endl;
+                if (input.length() >= k + meta_db.shape.length()) {
+                    record.sequence = input;
+                    
+                    iterator.setRecord(record);
+                    
+                    cout << input << endl;
+                    cout << shape_str << endl;
+                    
+                    while (iterator.hasNext()) {
+                        iterator.operator() (key);
+                        cout << "key: " << KmerUtils::bytesToDNA(key, k) << ": ";
+                        
+                        uint64_t tid = map.search(key);
+                        *((uint64_t*)value_cache) = tid;
+                        Utils::swapEndianess(value_cache, 3);
+                        cout << *((uint64_t*)value_cache) << endl;
+                        //uint64_t hash = map.Hash(key);
+                        //map.printMapPSL(hash, 5);
+                    }
+                }
+                cin >> input;
+                
+            }
+            
+            if (testfile) {
+                cout << "input filepath" << endl;
+                cin >> input;
+    
+//                // Load Taxonomy
+//                NCBITaxonomy taxonomy = NCBITaxonomy();
+//                taxonomy.loadCustomNodes(db + MetaDataDB::TAX_NODES_FILE);
+//                taxonomy.loadCustomNames(db + MetaDataDB::TAX_NAMES_FILE);
+                
+                BufferedFastxReader reader = BufferedFastxReader();
+                std::istream* is = new std::ifstream(input);
+                uint64_t value = 1;
+                uint64_t tax_id = 0;
+                
+                while (true) {
+                    bool ok = false;
+                    ok = reader.LoadBlock(*is, 200000);
+                    if (!ok) break;
+                    
+                    while (true) {
+                        auto valid_fragment = reader.NextSequence(record);
+                        if (!valid_fragment) break;
+                        iterator.setRecord(record);
+                        cout << record.to_string() << endl;
+    
+//                        // Extract taxonomic identifier from sequence header (has to be a ncbi identifier e.g.: >813)
+//                        value = stoll(record.header.substr(1));
+//                        tax_id = taxonomy.getCustom(value);
+//                        if (tax_id == -1) {
+//                            cerr << "unknown taxid: " << tax_id << " for value " << value << endl;
+//                            continue;
+//                        }
+    
+                        while (iterator.hasNext()) {
+                            // Extract key from k-mer
+                            iterator.operator()(key);
+                            cout << map.Hash(key) << endl;
+                            cout << KmerUtils::bytesToDNA(key, 22) << ": ";
+                            uint64_t tid = map.search(key);
+                            *((uint64_t*)value_cache) = tid;
+                            Utils::swapEndianess(value_cache, 3);
+                            cout << *((uint64_t*)value_cache) << endl;
+                            value = map.search(key);
+                            if (*((uint64_t*)value_cache) == 0) {
+                                cerr << "missing k-mer at pos in sequence" << iterator.getPos() << endl;
+                                cerr << iterator.getSubstring(iterator.getPos()-1, 100);
+                                cout << record.to_string();
+                                exit (50);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            delete[] key;
+            delete[] value_cache;
+            
+        } else if (string(argv[1]) == test_mode) {
+//            std::string folder = "/home/joachim/CLionProjects/varkit/data/test/";
+//            std::string file = folder + "gzip_test.txt";
+//            std::string out = folder + "gzip_test.txt.gz";
+//            std::string unzip_out = folder + "gzip_test2_double.txt";
+//            std::string test = folder + "test.txt";
+//
+//            std::string dna_in = folder + "ultra_test.fa";
+//            std::string dna_out = folder + "test.fa.gz";
+            
+//            test_key();
+//            test_kmer_buffer();
+//            cout << "zip" << endl;
+//            gzip_test(file.c_str(), out.c_str());
+//            cout << "done zippin" << endl;
+//            gunzip_test(out.c_str(), unzip_out.c_str());
+            
+//            cout << file << endl;
+//            read_auto(file.c_str());
+//            cout << out << endl;
+//            read_auto(out.c_str());
+//            cout << unzip_out << endl;
+//            read_auto(unzip_out.c_str());
+//            cout << "auto detect: " << test << endl;
+//            read_auto(test.c_str());
+//            cout << "txt only: " << test << endl;
+//            read_unzipped(test.c_str());
+//            cout << "getline: " << test << endl;
+//            read_getline(test.c_str());
+            
+            //gzip_test(dna_in.c_str(), dna_out.c_str());
+            
+//            cout << "read" << endl;
+//            read_auto(dna_out.c_str());
+
+            string nodes =  "/media/joachim/TOSHIBA EXT/Bioinformatics/gtdb_taxonomy.dmp";
+
+            string subset_path = "/home/joachim/CLionProjects/varkit/data/taxonomy/gtdb/taxa.txt";
+            string names_out = "/home/joachim/CLionProjects/varkit/data/taxonomy/gtdb/names.dmp";
+            string nodes_out = "/home/joachim/CLionProjects/varkit/data/taxonomy/gtdb/nodes.dmp";
+            
+            GTDBTaxonomy taxonomy;
+            taxonomy.loadNodes(nodes);
+            taxonomy.subsetByTaxa(subset_path);
+            taxonomy.saveCustomNodes(nodes_out);
+            taxonomy.saveCustomNames(names_out);
+            
+            
         } else {
             cout << "'" << string(argv[1]) << "' is not a valid mode. Please provide a valid mode." << endl << endl;
             printGeneralHelp(min_dist, max_cols);
         }
+        
+        delete[] argv_copy;
     }
+
     
     return 0;
 }

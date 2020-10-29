@@ -11,32 +11,646 @@
 #include "Utils.h"
 #include "csv.h"
 
-class TaxonomyInterface {
-public:
-    virtual int lca(int a, int b) = 0;
-};
+
 
 class TaxonomyNode {
 public:
     int id = -1;
     TaxonomyNode * parent;
     std::string rank;
+    std::string name = "";
     int level;
     std::vector<TaxonomyNode*> children;
     
     void print() {
         cout << "id:\t" << id << endl;
-        if (parent)
+        if (!name.empty())
+            cout << "name:\t" << name << endl;
+        if (parent) {
             cout << "pid:\t" << parent->id << endl;
-        else cout << "root" << endl;
+            cout << "pname:\t" << parent->name << endl;
+        } else cout << "root" << endl;
         cout << "level:\t" << level << endl;
+        cout << "child_count:\t" << children.size() << endl;
     }
     
     ~TaxonomyNode() {
+//        cout << "destroy TaxonomyNode" << endl;
     }
 };
 
-struct NCBITaxonomy : public TaxonomyInterface {
+class TaxonomyInterface {
+public:
+    virtual int lca(int a, int b) = 0;
+    virtual int getCustom(int t) = 0;
+    virtual int getCustom(std::string t) = 0;
+    virtual std::string getOriginal(int taxid) = 0;
+    
+    virtual void loadCustomNodes(std::string basicString) = 0;
+    virtual void loadCustomNames(std::string path) = 0;
+    
+    virtual bool hasNode(int i) = 0;
+    virtual TaxonomyNode* getNode(int i) = 0;
+};
+
+class GTDBTaxonomy : public TaxonomyInterface {
+public:
+    GTDBTaxonomy() {};
+    ~GTDBTaxonomy() {
+//        cout << "destroy GTDBTaxonomy" << endl;
+    }
+    
+    
+    std::string getOriginal(int taxid) override {
+        return getNode(taxid)->name;
+    }
+    
+    
+    int lca(int t1, int t2) override {
+        
+        if (map_.find(t1) == map_.end() || map_.find(t2) == map_.end()) {
+            cerr << t1 << " or " << t2 << " are unknown custom taxids in the map at lca(t1, t2)" << endl;
+        }
+        
+        auto node1 = map_.at(t1);
+        auto node2 = map_.at(t2);
+        
+        int min = std::min(node1->level, node2->level);
+        
+        while (node1->level > min) {
+            node1 = node1->parent;
+        }
+        
+        while (node2->level > min) {
+            node2 = node2->parent;
+        }
+        
+        while (node1 != node2) {
+            node1 = node1->parent;
+            node2 = node2->parent;
+        }
+        return node1->id;
+    }
+    
+    std::string lca(std::string a, std::string b) {
+        if (name_map_.find(a) == name_map_.end() || name_map_.find(b) == name_map_.end()) {
+            cerr << a << " or " << b << " are unknown taxids in the map at lca(a, b)" << endl;
+        }
+    
+        auto node1 = name_map_.at(a);
+        auto node2 = name_map_.at(b);
+    
+        int min = std::min(node1->level, node2->level);
+    
+        while (node1->level > min)
+            node1 = node1->parent;
+        while (node2->level > min)
+            node2 = node2->parent;
+    
+        while (node1 != node2) {
+            node1 = node1->parent;
+            node2 = node2->parent;
+        }
+        return node1->name;
+    }
+    
+    int getCustom(int t) override {
+        if (from_gtdb_.find(to_string(t)) != from_gtdb_.end())
+            return from_gtdb_.at(to_string(t));
+        else {
+            cerr << "GTDB: " << t << " missing at getCustom(int gtdb)" << endl;
+            return -1;
+        }
+    }
+    
+    int getCustom(std::string t) override {
+        return from_gtdb_.at(t);
+    }
+    
+    
+    
+    void loadNodes(std::string path) {
+        int count = 0;
+        
+        if (!Utils::exists(path)) {
+            cerr << "Node file " << path << " does not exist." << endl;
+            exit(0);
+        }
+        
+        auto str = csv::load_file(path.c_str());
+        auto parser = csv::make_parser( str , '\t');
+        
+        std::string gtdb = "";
+        int id = 0;
+        int parent_id = 0;
+        std::string name = "";
+        std::string parent_name = "";
+        
+        std::string lineage = "";
+        std::string rank = "";
+        
+        bool header = true;
+    
+        TaxonomyNode* root = getOrNew("root");
+        root->id = 0;
+        
+        int row_count = 0;
+        
+        for (auto&& row : parser ) {
+            if (header) {
+                header = false;
+                continue;
+            }
+            row_count++;
+            
+            auto it = row.begin();
+            gtdb = (*it).to_string();
+//            cout << "gtdb: " << gtdb << endl;
+//
+//            cout << gtdb.substr(0, 10) << endl;
+//            cout << gtdb.substr(10) << endl;
+//
+            
+            if (gtdb.substr(0, 10).compare("GUT_GENOME") == 0) {
+                id = stoi(gtdb.substr(10));
+            }
+    
+            TaxonomyNode* node;
+            TaxonomyNode* parent;
+            int i = 0;
+            
+            lineage = (*(++it)).to_string();
+            std::vector<std::string> lineage_v;
+            Utils::split(lineage_v, lineage, ";");
+            for (i = 0; i < lineage_v.size(); i++) {
+                string id_string = "";
+                string token = lineage_v[i];
+                if (token.length() == 3) {
+                    if (id_string.empty()) {
+                        id_string = Utils::split(lineage_v[i-1], "__")[1];
+                    }
+                    lineage_v[i] = lineage_v[i] + id_string;
+                }
+                
+                node = getOrNew(lineage_v[i]);
+                parent = i == 0 ? root : getOrNew(lineage_v[i-1]);
+                node->parent = parent;
+
+                if (std::find(parent->children.begin(), parent->children.end(), node) == parent->children.end()) {
+                    parent->children.push_back(node);
+                }
+            }
+            node = getOrNew(to_string(id));
+            parent = getOrNew(lineage_v[--i]);
+            node->parent = parent;
+            node->id = id;
+            parent->children.push_back(node);
+            map_.insert({id, node});
+        }
+        
+        relevel(name_map_.at("root"));
+    }
+    
+    
+    void subsetByTaxa(string path) {
+        cout << "subsetByTaxa" << endl;
+        ifstream taxa_in;
+        string line;
+        taxa_in.open(path);
+        
+        if (!taxa_in.is_open()) {
+            cerr << "file " << path << " could not be loaded." << endl;
+            exit(0);
+        }
+        string id;
+        unordered_set<std::string> taxa_set;
+        int lines = 0;
+        while (getline(taxa_in, line)) {
+            ++lines;
+            if (line.substr(0, 10).compare("GUT_GENOME") == 0)
+                id = to_string(stoi(line.substr(10,16)));
+            
+            if (name_map_.find(id) != name_map_.end()) {
+                //cout << "push " << id << endl;
+                taxa_set.insert(id);
+            } else {
+                cerr << "discard " << line << endl;
+            }
+        }
+        cout << lines << endl;
+        taxa_in.close();
+        
+        
+        auto orig_set = taxa_set;
+        cout << "final set needs to contain at least " << taxa_set.size() << " ids." << endl;
+        
+        std::string root_name = "";
+        for (auto id : taxa_set) {
+            if (root_name.empty()) root_name = id;
+            else root_name = lca(root_name, id);
+        }
+        cout << "root: " << root_name << endl;
+
+
+        TaxonomyNode* root = name_map_.at(root_name);
+        root->parent = nullptr;
+
+        cout << "makesubsetcomplete" << endl;
+        makeSubsetComplete(taxa_set, root_name);
+        cout << "iscompletecheck" << endl;
+        isSubsetComplete(taxa_set, root_name);
+
+
+
+        subsetWorker(root, taxa_set);
+        cout << "after worker size: " << name_map_.size() << endl;
+
+        deleteUnlinkedNodes(root);
+        cout << "after delete unlinked size: " << name_map_.size() << endl;
+
+
+        int rel = 0;
+        int ire = 0;
+        countRelevantNodesInSubtree(root, rel, ire);
+
+        cout << "relevant: " << rel << endl;
+        cout << "irrelevant: " << ire << endl;
+
+//        auto children = root->children;
+//        for (auto n : children) {
+//            cout << "cleanup: " << n->name << "    ->    ";
+//            cleanUp(n, taxa_set);
+//        }
+//
+//
+//        cout << "final check" << endl;
+//        for (auto id : orig_set) {
+//            if (taxa_set.find(id) == taxa_set.end()) {
+//                cout << "invalid." << id << endl;
+//                exit(0);
+//            }
+//        }
+//
+//        cout << "Validity check. .";
+//        for (auto t : taxa) {
+//            if (map_.find(t) == map_.end()) {
+//                cout << " . failed for node: " << t << endl;
+//                exit(1);
+//            }
+//        }
+//        cout << " . passed" << endl;
+//
+        relabel(root);
+        relevel(root);
+//
+//
+//
+        //custom = true;
+    }
+    
+    void saveCustomNodes(string path) {
+        std::ofstream out(path);
+        
+        //auto err = map_.at(1734091392);
+        
+        
+        if (!out)
+            cerr << "unable to open outfile " << path << endl;
+        
+        auto writer = csv::make_writer(out);
+        
+        writer.write_row("taxid","gtdb_taxid","parent_taxid","rank","level");
+        for (auto pair : map_) {
+            auto node = pair.second;
+            
+            writer.write_row(
+                    node->id,
+                    to_gtdb_.at(node->id),
+                    (node->parent ? to_string(node->parent->id) : ""),
+                    node->rank,
+                    node->level);
+        }
+        out.close();
+    }
+    
+    void saveCustomNames(string path) {
+        std::ofstream out(path);
+        if (!out)
+            cerr << "unable to open outfile " << path << endl;
+        
+        auto writer = csv::make_writer(out);
+        
+        writer.write_row("taxid","scientific_name");
+        for (auto pair : map_) {
+            writer.write_row(
+                    pair.first,
+                    pair.second->name);
+        }
+        out.close();
+    }
+    
+    
+    void loadCustomNodes(string path) override {
+//        clear();
+        
+        cout << "custom nodes: " << path << endl;
+        
+        if (!Utils::exists(path)) {
+            cerr << "file " << path << " does not exist." << endl;
+            exit(0);
+        }
+        
+        auto str = csv::load_file(path.c_str());
+        auto parser = csv::make_parser(str);
+        
+        bool header = true;
+        
+        for (auto&& row : parser ) {
+            if (header) {
+                header = false;
+                continue;
+            }
+            
+            auto it = row.begin();
+            
+            int taxid = (*it).to_int();
+            std::string gtdb_id = (*(++it)).to_string();
+            
+            
+            to_gtdb_.insert({taxid, gtdb_id});
+            from_gtdb_.insert({gtdb_id, taxid});
+            
+            int parent_id = (*(++it)).to_int();
+            string rank = (*(++it)).to_string();
+            int level = (*(++it)).to_int();
+            
+            TaxonomyNode* node = getOrNew(taxid);
+            node->id = taxid;
+            node->rank = rank;
+            node->level = level;
+            if (taxid != 1) {
+                TaxonomyNode* parent = getOrNew(parent_id);
+                node->parent = parent;
+                parent->id = parent_id;
+                parent->children.push_back(node);
+            } else {
+                node->parent = nullptr;
+            }
+        }
+        
+//        custom = true;
+    }
+    
+    std::string rank(char c) {
+        switch(c) {
+            case ('r'):
+                return "root";
+                break;
+            case ('p'):
+                return "phylum";
+                break;
+            case ('c'):
+                return "class";
+                break;
+            case ('o'):
+                return "order";
+                break;
+            case ('f'):
+                return "family";
+                break;
+            case ('g'):
+                return "genus";
+                break;
+            case ('s'):
+                return "species";
+                break;
+            default:
+                return "genome";
+                break;
+        }
+    }
+    
+    void loadCustomNames(string path) override {
+        auto str = csv::load_file(path.c_str());
+        auto parser = csv::make_parser(str);
+    
+        bool header = true;
+    
+        for (auto&& row : parser ) {
+            if (header) {
+                header = false;
+                continue;
+            }
+            
+            auto it = row.begin();
+            int taxid = (*it).to_int();
+            string name = (*(++it)).to_string();
+            auto node = map_.at(taxid);
+            node->name = name;
+            node->rank = rank(name[0]);
+        }
+    }
+    
+    bool hasNode(int t) override {
+        return (map_.find(t) != map_.end());
+    }
+    
+    TaxonomyNode* getNode(int custom) override {
+        if (map_.find(custom) != map_.end())
+            return map_.at(custom);
+        else {
+            cerr << "id unknown: " << custom << " for getNode(custom)" << endl;
+            return nullptr;
+        }
+    }
+
+private:
+    std::unordered_map<std::string, TaxonomyNode*> name_map_;
+    std::unordered_map<int, TaxonomyNode*> map_;
+    std::vector<std::string> names_;
+    std::unordered_map<int,std::string> to_gtdb_;
+    std::unordered_map<std::string,int> from_gtdb_;
+    
+    inline TaxonomyNode * getOrNew(int taxid) {
+        static int new_count = 0;
+        if (map_.count(taxid) == 1) {
+            return map_.at(taxid);
+        } else {
+            auto node = new TaxonomyNode();
+            map_.insert({taxid, node});
+            return node;
+        }
+    }
+    
+    void relevel(TaxonomyNode* node, int level = 0) {
+        node->level = ++level;
+        for (auto child : node->children)
+            relevel(child, level);
+    }
+    
+    inline TaxonomyNode * getOrNew(std::string taxid) {
+        static int new_count = 0;
+        if (name_map_.find(taxid) != name_map_.end()) {
+            return name_map_.at(taxid);
+        } else {
+            //cout << "new: " << ++new_count << endl;
+            auto node = new TaxonomyNode();
+            node->name = taxid;
+            names_.push_back(taxid);
+            name_map_.insert({taxid, node});
+            return node;
+        }
+    }
+    
+    void makeSubsetComplete(unordered_set<std::string> &taxa, std::string root_name) {
+        cout << "after subset complete" << taxa.size() << endl;
+        TaxonomyNode* node;
+        TaxonomyNode* root = name_map_.at(root_name);
+        taxa.insert(root->name);
+        auto copy = taxa;
+        for (auto id : copy) {
+            node = name_map_.at(id);
+            auto cache = node;
+            while (node != root) {
+                taxa.insert(node->name);
+                node = node->parent;
+            }
+        }
+        cout << "after subset complete" << taxa.size() << endl;
+    }
+    
+    void isSubsetComplete(unordered_set<std::string> &taxa, std::string root_name) {
+        
+        TaxonomyNode* node;
+        TaxonomyNode* root = name_map_.at(root_name);
+        if (taxa.find(root->name) == taxa.end()) {
+            cerr << "violation: " << root->name << "(root) missing in set." << endl;
+            exit(0);
+        }
+        for (auto id : taxa) {
+            node = name_map_.at(id);
+            while (node != root) {
+                if (taxa.find(node->name) == taxa.end()) {
+                    cerr << "violation: " << node->name << " missing in set." << endl;
+                    exit(0);
+                }
+                node = node->parent;
+            }
+        }
+    }
+    
+    void subsetWorker(TaxonomyNode* node, unordered_set<std::string> &taxa) {
+        auto children = node->children;
+        for (auto child : children) {
+            if (taxa.find(child->name) == taxa.end()) {
+                deleteFromVector(node->children, child);
+            }
+        }
+        for (auto child : node->children) {
+            subsetWorker(child, taxa);
+        }
+    }
+    
+    void deleteFromVector(vector<TaxonomyNode*> &v, TaxonomyNode* rm) {
+        if (std::find(v.begin(), v.end(), rm) != v.end())
+            v.erase(std::remove(v.begin(), v.end(), rm), v.end());
+    }
+    
+    void deleteUnlinkedNodes(TaxonomyNode* node) {
+        unordered_set<std::string> valid_taxa;
+        unordered_set<std::string> invalid_taxa;
+        extractTaxaInSubtree(node, valid_taxa);
+        for (auto pair : name_map_) {
+            if (valid_taxa.find(pair.first) == valid_taxa.end()) {
+                invalid_taxa.insert(pair.first);
+            }
+        }
+        
+        for (auto id : invalid_taxa) {
+            auto cache = name_map_.at(id);
+            name_map_.erase(id);
+            delete(cache);
+        }
+    }
+    
+    void extractTaxaInSubtree(TaxonomyNode* node, unordered_set<std::string> &taxa) {
+        taxa.insert(node->name);
+        for (auto child : node->children)
+            extractTaxaInSubtree(child, taxa);
+    }
+    
+    void countRelevantNodesInSubtree(TaxonomyNode* node, int &sum, int &ir) {
+        if (node->children.size() == 1) {
+            ir++;
+            countRelevantNodesInSubtree(node->children[0], sum, ir);
+        } else {
+            sum++;
+            for (auto n : node->children)
+                countRelevantNodesInSubtree(n, sum, ir);
+        }
+    }
+    
+    void cleanUp(TaxonomyNode* node, unordered_set<std::string> &taxa) {
+        auto tmp = node;
+        
+        // if node has only one child it is an unnecessary intermediate node
+        if (tmp->children.size() == 1) {
+            while (tmp->children.size() == 1 && taxa.find(tmp->name) == taxa.end())
+                tmp = tmp->children[0];
+            
+            // rewire new parent and new child
+            deleteFromVector(node->parent->children, node);
+            node->parent->children.push_back(tmp);
+            tmp->parent = node->parent;
+            
+            //delete all intermediate nodes
+            while (node != tmp) {
+                auto cache = node;
+                node = node->children[0];
+                
+                //delete from map and finally delete node
+                name_map_.erase(cache->name);
+                delete cache;
+            }
+        }
+        
+        auto children = tmp->children;
+        for (auto n : children) {
+            cleanUp(n, taxa);
+        }
+    }
+    
+    void relabel(TaxonomyNode* root) {
+        int custom_id = 0;
+        int ncbi_id;
+        queue<TaxonomyNode *> q;
+        q.push(root);
+        name_map_.clear();
+        map_.clear();
+    
+        int count = 0;
+        while (!q.empty()) {
+            count++;
+            auto node = q.front();
+            q.pop();
+        
+            int ncbi_id = node->id;
+            node->id = ++custom_id;
+        
+            map_.insert({custom_id, node});
+            // fill conversion maps
+            to_gtdb_.insert({custom_id, node->name});
+            from_gtdb_.insert({node->name, custom_id});
+        
+            for (auto child : node->children) {
+                q.push(child);
+            }
+        }
+    }
+};
+
+
+class NCBITaxonomy : public TaxonomyInterface {
     std::unordered_map<int, TaxonomyNode*> map_;
     std::unordered_map<int, string> names_;
     std::unordered_map<int,int> to_ncbi_;
@@ -48,108 +662,51 @@ struct NCBITaxonomy : public TaxonomyInterface {
     
     NCBITaxonomy(std::string path) {
         loadNodes(path);
+    };
+    
+    
+    void printPath(TaxonomyNode* node, TaxonomyNode* root) {
+        while (node != root) {
+            cout << node->id << " >> ";
+            node = node->parent;
+        }
+        cout << root->id << endl;
     }
     
-    NCBITaxonomy(){};
-    
-    
-    void loadNodes(std::string path) {
-        int count = 0;
-        
-        auto str = csv::load_file(path.c_str());
-        auto parser = csv::make_parser( str , '\t');
-        
-        for (auto&& row : parser ) {
-            auto it = row.begin();
-            int id = (*it).to_int();
-            int parent_id = (*(++++it)).to_int();
-            string rank = (*(++++it)).to_string();
-    
-            TaxonomyNode* node = getOrNew(id);
-            node->id = id;
-            if (id != 1) {
-                node->rank = rank;
-                TaxonomyNode* parent = getOrNew(parent_id);
-                node->parent = parent;
-                parent->id = parent_id;
-                parent->children.push_back(node);
-            } else {
-                node->rank = "root";
-                node->parent = nullptr;
-                node->level = 0;
-        
-            }
-        }
-        relevel(map_.at(1));
-    }
-    
-    void loadNames(std::string path) {
-        auto str = csv::load_file(path.c_str());
-        auto parser = csv::make_parser( str , '\t');
-        for (auto&& row : parser ) {
-            auto it = row.begin();
-            
-            int id = (*it).to_int();
-
-            if (names_.find(id) != names_.end()) continue;
-            
-            string name = (*(++++it)).to_string();
-            string type = (*(++++++++it)).to_string();
-    
-            if (type == SCIENTIFIC_NAME)
-                names_.insert({id, name});
-        }
-    }
-
-    void subsetByTaxa(string path) {
-        vector<int> taxa;
-        
-        ifstream taxa_in;
-        string line;
-        taxa_in.open(path);
-        if (taxa_in.is_open()) {
-            while (getline(taxa_in, line)) {
-                taxa.push_back(stoi(line));
-            }
-        }
-        taxa_in.close();
-        
-        auto taxa_set = getCompleteSetOfTaxa(taxa);
-    
-    
-        cout << "set has 1315283: " << (taxa_set.find(1315283) != taxa_set.end()) << endl;
-        
-        int root_id = -1;
-        for (auto id : taxa_set) {
-            if (root_id == -1) root_id = id;
-            else root_id = lca(root_id, id);
-        }
-        cout << "root: " << root_id << endl;
-        
+    void makeSubsetComplete(unordered_set<int> &taxa, int root_id) {
+        cout << taxa.size() << endl;
+        TaxonomyNode* node;
         TaxonomyNode* root = map_.at(root_id);
-        root->parent = nullptr;
-    
-        cout << "before worker size: " << map_.size() << endl;
-        subsetWorker(root, taxa_set);
-        cout << "after worker size: " << map_.size() << endl;
-        deleteUnlinkedNodes(root);
-        cout << "after delete unlinked size: " << map_.size() << endl;
-        
-        cout << "map has 1315283: " << (map_.find( 1315283) != map_.end()) << endl;
-        
-        int rel = 0;
-        int ire = 0;
-        countRelevantNodesInSubtree(root, rel, ire);
-        cout << "relevant: " << rel << endl;
-        cout << "irrelevant: " << ire << endl;
-    
-        auto children = root->children;
-        for (auto n : children) {
-            cleanUp(n);
+        taxa.insert(root->id);
+        auto copy = taxa;
+        for (auto id : copy) {
+            node = map_.at(id);
+            auto cache = node;
+            while (node != root) {
+                taxa.insert(node->id);
+                node = node->parent;
+            }
         }
-        relabel(root);
-        relevel(root);
-        custom = true;
+    }
+    
+    void isSubsetComplete(unordered_set<int> &taxa, int root_id) {
+        
+        TaxonomyNode* node;
+        TaxonomyNode* root = map_.at(root_id);
+        if (taxa.find(root->id) == taxa.end()) {
+            cerr << "violation: " << root->id << "(root) missing in set." << endl;
+            exit(0);
+        }
+        for (auto id : taxa) {
+            node = map_.at(id);
+            while (node != root) {
+                if (taxa.find(node->id) == taxa.end()) {
+                    cerr << "violation: " << node->id << " missing in set." << endl;
+                    exit(0);
+                }
+                node = node->parent;
+            }
+        }
     }
     
     void subsetWorker(TaxonomyNode* node, unordered_set<int> &taxa) {
@@ -165,25 +722,34 @@ struct NCBITaxonomy : public TaxonomyInterface {
     }
     
     unordered_set<int> getCompleteSetOfTaxa(vector<int> &taxa) {
+        cout << "get comP " << endl;
         unordered_set<int> t_set;
         int root_id = taxa[0];
+        cout << "add to set ... ";
+        
         for (int i = 0; i < taxa.size(); i++) {
             root_id = lca(root_id, taxa[i]);
             t_set.insert(taxa[i]);
+
             for (int j = i+1; j < taxa.size(); j++) {
                 t_set.insert(lca(taxa[i], taxa[j]));
             }
         }
+        cout << "ok" << endl;
+        
+        /*
         auto copy = t_set;
         for (auto taxid : copy) {
             if (taxid == root_id) continue;
+            cout << taxid;
             auto node = map_.at(taxid)->parent;
+            cout << endl;
             while (node && node->id != root_id && t_set.find(node->id) == t_set.end()) {
                 t_set.insert(node->id);
                 auto cache = node;
                 node = node->parent;
             }
-        }
+        }*/
         return t_set;
     }
     
@@ -256,6 +822,21 @@ struct NCBITaxonomy : public TaxonomyInterface {
         }
     }
     
+    void testNames(std::unordered_set<int> taxa) {
+        bool err = false;
+        for (auto t : taxa) {
+            if (names_.find(t) == names_.end()) {
+                cerr << "taxon " << t << " is missing in names_." << endl;
+                err = true;
+            }
+            if (from_ncbi_.find(t) == from_ncbi_.end()) {
+                cerr << "taxon " << t << " is missing in from_ncbi_." << endl;
+                err = true;
+            }
+            if (err) exit(1);
+        }
+    }
+    
     void countRelevantNodesInSubtree(TaxonomyNode* node, int &sum, int &ir) {
         if (node->children.size() == 1) {
             ir++;
@@ -265,15 +846,14 @@ struct NCBITaxonomy : public TaxonomyInterface {
             for (auto n : node->children)
                 countRelevantNodesInSubtree(n, sum, ir);
         }
-
     }
     
-    void cleanUp(TaxonomyNode* node) {
+    void cleanUp(TaxonomyNode* node, unordered_set<int> &taxa) {
         auto tmp = node;
-    
+        
         // if node has only one child it is an unnecessary intermediate node
         if (tmp->children.size() == 1) {
-            while (tmp->children.size() == 1)
+            while (tmp->children.size() == 1 && taxa.find(tmp->id) == taxa.end())
                 tmp = tmp->children[0];
             
             // rewire new parent and new child
@@ -294,7 +874,7 @@ struct NCBITaxonomy : public TaxonomyInterface {
         
         auto children = tmp->children;
         for (auto n : children) {
-            cleanUp(n);
+            cleanUp(n, taxa);
         }
     }
     
@@ -352,9 +932,11 @@ struct NCBITaxonomy : public TaxonomyInterface {
         // only keep subtrees of taxons in the list
         deleteWorker(root, nodes);
         
+        unordered_set<int> dummy;
+        
         auto children = root->children;
         for (auto n : children) {
-            cleanUp(n);
+            cleanUp(n, dummy);
         }
         
         return root->id;
@@ -486,25 +1068,38 @@ struct NCBITaxonomy : public TaxonomyInterface {
 
 public:
     int lca(int t1, int t2) override {
-        if (custom) {
-            t1 = from_ncbi_.at(t1);
-            t2 = from_ncbi_.at(t2);
+    
+        if (map_.find(t1) == map_.end() || map_.find(t2) == map_.end()) {
+            cerr << t1 << " or " << t2 << " are unknown taxids in the map at lca(t1, t2)" << endl;
         }
+        
         auto node1 = map_.at(t1);
         auto node2 = map_.at(t2);
         
         int min = std::min(node1->level, node2->level);
         
-        while (node1->level > min)
+        while (node1->level > min) {
             node1 = node1->parent;
-        while (node2->level > min)
+        }
+    
+        while (node2->level > min) {
             node2 = node2->parent;
+        }
         
         while (node1 != node2) {
             node1 = node1->parent;
             node2 = node2->parent;
         }
         return node1->id;
+    }
+    
+    std::string getOriginal(int custom) override {
+        if (to_ncbi_.find(custom) != to_ncbi_.end())
+            return to_string(to_ncbi_.at(custom));
+        else {
+            cerr << "custom: " << custom << " missing at getNCBI(int custom)" << endl;
+            return "";
+        }
     }
     
     void shrinkToSubtreesOf(vector<int> taxids) {
@@ -523,7 +1118,12 @@ public:
         relevel(map_.at(1));
     }
     
+    bool hasNode(int ncbi) override {
+        return (from_ncbi_.find(ncbi) != from_ncbi_.end());
+    }
+    
     void loadCustomNames(string path) {
+        cout << "custom names: " << path << endl;
     
         auto str = csv::load_file(path.c_str());
         auto parser = csv::make_parser(str);
@@ -545,10 +1145,10 @@ public:
         custom = true;
     }
     
-    void loadCustomNodes(string path) {
+    void loadCustomNodes(string path) override {
         clear();
         
-        cout << path << endl;
+        cout << "custom nodes: " << path << endl;
         
         auto str = csv::load_file(path.c_str());
         auto parser = csv::make_parser(str);
@@ -586,21 +1186,45 @@ public:
                 node->parent = nullptr;
             }
         }
-        custom = true;
+        cout << "nodes: " << map_.size() << endl;
     }
     
     int getNCBI(int custom) {
-        return to_ncbi_.at(custom);
+        if (to_ncbi_.find(custom) != to_ncbi_.end())
+            return to_ncbi_.at(custom);
+        else {
+            cerr << "custom: " << custom << " missing at getNCBI(int custom)" << endl;
+            return -1;
+        }
     }
     
     int getCustom(int ncbi) {
-        return from_ncbi_.at(ncbi);
+        if (from_ncbi_.find(ncbi) != from_ncbi_.end())
+            return from_ncbi_.at(ncbi);
+        else {
+            cerr << "NCBI: " << ncbi << " missing at getCustom(int ncbi)" << endl;
+            return -1;
+        }
     }
     
-    TaxonomyNode* getNode(int custom) {
+    int getCustom(std::string ncbi) {
+        int tid = stoi(ncbi);
+        if (from_ncbi_.find(tid) != from_ncbi_.end())
+            return from_ncbi_.at(tid);
+        else {
+            cerr << "NCBI: " << ncbi << " missing at getCustom(int ncbi)" << endl;
+            return -1;
+        }
+        return -1;
+    }
+    
+    TaxonomyNode* getNode(int custom) override {
         if (map_.find(custom) != map_.end())
             return map_.at(custom);
-        return nullptr;
+        else {
+            cerr << "id unknown: " << custom << " for getNode(custom)" << endl;
+            return nullptr;
+        }
     }
     
     void saveCustomNodes(string path) {
@@ -650,6 +1274,178 @@ public:
                    pair.second);
         }
         out.close();
+    }
+    
+    NCBITaxonomy(){}
+    
+    void loadNodes(std::string path) {
+        int count = 0;
+        
+        if (!Utils::exists(path)) {
+            cerr << "Node file " << path << " does not exist." << endl;
+            exit(0);
+        }
+        
+        auto str = csv::load_file(path.c_str());
+        auto parser = csv::make_parser( str , '\t');
+        
+        for (auto&& row : parser ) {
+            auto it = row.begin();
+            int id = (*it).to_int();
+            int parent_id = (*(++++it)).to_int();
+            string rank = (*(++++it)).to_string();
+            
+            TaxonomyNode* node = getOrNew(id);
+            node->id = id;
+            if (id != 1) {
+                node->rank = rank;
+                TaxonomyNode* parent = getOrNew(parent_id);
+                node->parent = parent;
+                parent->id = parent_id;
+                parent->children.push_back(node);
+            } else {
+                node->rank = "root";
+                node->parent = nullptr;
+                node->level = 0;
+                
+            }
+        }
+        relevel(map_.at(1));
+    }
+    
+    void subsetByTaxa(string path) {
+        cout << "subsetByTaxa" << endl;
+        vector<int> taxa;
+        
+        ifstream taxa_in;
+        string line;
+        taxa_in.open(path);
+    
+        if (!taxa_in.is_open()) {
+            cerr << "file " << path << " could not be loaded." << endl;
+            exit(0);
+        }
+        
+        unordered_set<int> taxa_set;
+        while (getline(taxa_in, line)) {
+            if (map_.find(stoi(line)) != map_.end() && std::find(taxa.begin(), taxa.end(), stoi(line)) == taxa.end()) {
+                cout << "push " << line << endl;
+                taxa_set.insert(stoi(line));
+                //taxa.push_back(stoi(line));
+            } else {
+                cout << "discard " << line << endl;
+            }
+        }
+        taxa_in.close();
+    
+        
+        //auto taxa_set = getCompleteSetOfTaxa(taxa);
+        //cout << "ok" << endl;
+        auto orig_set = taxa_set;
+        
+        cout << "final set needs to contain at least " << taxa_set.size() << " ids." << endl;
+
+        int root_id = -1;
+        for (auto id : taxa_set) {
+            if (root_id == -1) root_id = id;
+            else root_id = lca(root_id, id);
+        }
+        cout << "root: " << root_id << endl;
+        
+        
+        TaxonomyNode* root = map_.at(root_id);
+        root->parent = nullptr;
+        
+        cout << "makesubsetcomplete" << endl;
+        makeSubsetComplete(taxa_set, root_id);
+        cout << "iscompletecheck" << endl;
+        isSubsetComplete(taxa_set, root_id);
+    
+    
+        
+        subsetWorker(root, taxa_set);
+        cout << "after worker size: " << map_.size() << endl;
+    
+    
+        
+        deleteUnlinkedNodes(root);
+        cout << "after delete unlinked size: " << map_.size() << endl;
+        
+        
+        int rel = 0;
+        int ire = 0;
+        countRelevantNodesInSubtree(root, rel, ire);
+    
+        cout << "relevant: " << rel << endl;
+        cout << "irrelevant: " << ire << endl;
+    
+        auto children = root->children;
+        for (auto n : children) {
+            cout << "cleanup: " << n->id << "    ->    ";
+            cleanUp(n, taxa_set);
+            cout << "cleanup. 82993: " << (map_.find(82993) != map_.end()) << endl;
+        }
+        
+        cout << "7. 82993: " << (map_.find(82993) != map_.end()) << endl;
+    
+        cout << "final check" << endl;
+        for (auto id : orig_set) {
+            if (taxa_set.find(id) == taxa_set.end()) {
+                cout << "invalid." << id << endl;
+                exit(0);
+            }
+        }
+    
+        cout << "Validity check. .";
+        for (auto t : taxa_set) {
+            if (map_.find(t) == map_.end()) {
+                cout << " . failed for node: " << t << endl;
+                exit(1);
+            }
+        }
+        cout << " . passed" << endl;
+        
+        relabel(root);
+        relevel(root);
+    
+        
+        
+        custom = true;
+    }
+    
+    void loadNames(std::string path) {
+        if (!Utils::exists(path)) {
+            cerr << "Names file " << path << " does not exist." << endl;
+            exit(0);
+        }
+        
+        auto str = csv::load_file(path.c_str());
+        auto parser = csv::make_parser( str , '\t');
+        for (auto&& row : parser ) {
+            auto it = row.begin();
+            
+            int id = (*it).to_int();
+
+            if (names_.find(id) != names_.end()) continue;
+            
+            string name = (*(++++it)).to_string();
+            string type = (*(++++++++it)).to_string();
+    
+            if (type == SCIENTIFIC_NAME)
+                names_.insert({id, name});
+        }
+    }
+};
+
+class TaxonomyNodeComparer {
+public:
+    TaxonomyInterface* taxonomy;
+    explicit TaxonomyNodeComparer(TaxonomyInterface* taxonomy) : taxonomy(taxonomy) {};
+//    ~TaxonomyNodeComparer() {
+//        cout << omp_get_thread_num << ": destroy TaxonomyNodeComparer" << endl;
+//    }
+    bool operator() (const int &a, const int &b) const {
+        return taxonomy->getNode(a)->level > taxonomy->getNode(b)->level;
     }
 };
 

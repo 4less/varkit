@@ -13,7 +13,21 @@ using namespace std;
 
 namespace KmerUtils {
     static inline uint8_t getBitFromBase(char base) {
-        switch(base) {
+        switch (base) {
+            case 'A':
+                return (0);
+            case 'C':
+                return (1);
+            case 'G':
+                return (2);
+            case 'T':
+                return (3);
+        }
+        return (-1);
+    }
+    
+    static inline uint8_t getBitFromBase(const char* base) {
+        switch((char)(*base)) {
             case 'A':
                 return (0);
             case 'C':
@@ -28,6 +42,20 @@ namespace KmerUtils {
     
     static inline uint8_t getBitFromBaseC(char base) {
         switch(base) {
+            case 'A':
+                return (3);
+            case 'C':
+                return (2);
+            case 'G':
+                return (1);
+            case 'T':
+                return (0);
+        }
+        return(-1);
+    }
+    
+    static inline uint8_t getBitFromBaseC(const char* base) {
+        switch((char)(*base)) {
             case 'A':
                 return (3);
             case 'C':

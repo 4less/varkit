@@ -5,6 +5,7 @@
 #ifndef VARKIT_SPACEDKMERITERATOR_H
 #define VARKIT_SPACEDKMERITERATOR_H
 
+#include <FastxReader.h>
 #include "KmerIterator.h"
 
 class SpacedKmerIterator : public KmerIterator {
@@ -18,7 +19,9 @@ class SpacedKmerIterator : public KmerIterator {
     uint32_t shape_size_;
     
     FastaRecord record_;
-    char * sequence_ = nullptr;
+    FastxRecord recordx_;
+    size_t sequence_length_ = 0;
+    const char * sequence_ = nullptr;
     
     void getKey(uint8_t * key) {
         memset(key, 0, key_bytes_);
@@ -48,12 +51,25 @@ class SpacedKmerIterator : public KmerIterator {
         }
     }
     
+    void inline getKeyBoth(uint8_t * key, uint8_t * key_rc) {
+        memset(key, 0, key_bytes_);
+        memset(key_rc, 0, key_bytes_);
+        
+        int offset = 0;
+        for (int i = 0; i < k_; i++) {
+            while (shape_[i+offset])
+                offset++;
+            key[i/4] |= KmerUtils::getBitFromBase(sequence_[pos_ + i + offset]) << (2*(3-(i%4)));
+            key_rc[i/4] |= KmerUtils::getBitFromBaseC(sequence_[pos_ + (shape_size_-1) - (i + offset)]) << (2*(3-(i%4)));
+        }
+    }
+    
 public:
     void setFastaRecord(FastaRecord record) {
         record_ = record;
-        
+        /*
         if (buffer_ == 0 && sequence_) {
-            cout << "free" << endl;
+            //cout << "free" << endl;
             free(sequence_);
         }
         
@@ -61,28 +77,36 @@ public:
             sequence_ = (char*)malloc(record.sequence.length() * sizeof(char));
         
         memcpy(sequence_, record.sequence.c_str(), record.sequence.length() * sizeof(char));
-        
+        */
         pos_ = 0;
     }
     
+    void setRecord(FastxRecord &record) {
+        sequence_ = record.sequence.c_str();
+        sequence_length_ = record.sequence.size();
+        recordx_ = record;
+        pos_ = 0;
+    }
     
     string getSubstring(int pos, int length) {
         int offset = 0;
-        if (pos+length >= record_.sequence.length()) {
-            offset = (pos + length) - record_.sequence.length();
+        if (pos < 0)
+            offset = pos;
+        else if (pos+length >= sequence_length_) {
+            offset = pos + length - sequence_length_;
         }
-        return record_.sequence.substr(pos - offset, length - offset);
+        return recordx_.sequence.substr(pos - offset, length);
     }
     
     uint32_t currentLength() {
-        return record_.sequence.length();
+        return sequence_length_;
     }
     
     inline bool hasNext() {
-        return (pos_ < record_.sequence.length()-shape_size_+1);
+        return (pos_ < sequence_length_ - shape_size_+1);
     }
     
-    bool isSmallerThan(uint8_t * a, uint8_t * b) {
+    bool inline isSmallerThan(uint8_t * a, uint8_t * b) {
         for (int i = 0; i < key_bytes_; i++) {
             if (a[i] != b[i])
                 return (a[i] < b[i]);
@@ -104,16 +128,21 @@ public:
         }
     }
     
-    void operator () (uint8_t * key) {
-        getKey(key_);
-        getKeyRC(key_rc_);
+    ~SpacedKmerIterator() {
+        delete[] key_;
+        delete[] key_rc_;
+    }
+    
+    void inline operator () (uint8_t * key) {
+        //getKey(key_);
+        //getKeyRC(key_rc_);
         
-        if (isSmallerThan(key_, key_rc_)) {
+        getKeyBoth(key_, key_rc_);
+        
+        if (isSmallerThan(key_, key_rc_))
             memcpy(key, key_, key_bytes_);
-        }
-        else {
+        else
             memcpy(key, key_rc_, key_bytes_);
-        }
         pos_++;
     }
     
