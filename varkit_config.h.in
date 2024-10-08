@@ -1,0 +1,2 @@
+#define varkit_VERSION_MAJOR @varkit_VERSION_MAJOR@
+#define varkit_VERSION_MINOR @varkit_VERSION_MINOR@

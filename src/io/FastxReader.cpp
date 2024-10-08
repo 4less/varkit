@@ -8,7 +8,7 @@
 #include <sysexits.h>
 #include <iostream>
 #include <ctype.h>
-
+;
 using std::string;
 
 inline void StripString(string &str) {
@@ -64,13 +64,17 @@ bool BufferedFastxReader::LoadBlock(std::istream &ifs, size_t block_size) {
             case '@' : file_format_ = FORMAT_FASTQ; break;
             case '>' : file_format_ = FORMAT_FASTA; break;
             default:
-                errx(EX_DATAERR, "sequence reader - unrecognized file format");
+                errx(EX_DATAERR, "sequence reader - unrecognized file format %c", block_buffer_[0]);
         }
     }
+
     str_buffer_.assign(block_buffer_, ifs.gcount());
+    last_block_size_ = ifs.gcount();
     str_stream_ << str_buffer_;
-    if (getline(ifs, str_buffer_))
+
+    if (getline(ifs, str_buffer_)) {
         str_stream_ << str_buffer_ << "\n";
+    }
     if (file_format_ == FORMAT_FASTQ) {
         while (getline(ifs, str_buffer_)) {
             str_stream_ << str_buffer_ << "\n";
@@ -117,7 +121,9 @@ bool BufferedFastxReader::LoadBatch(std::istream &ifs, size_t record_count) {
         }
         valid = true;
     }
-    
+
+    auto before = ifs.tellg();
+
     size_t line_count = 0;
     while (record_count > 0 && ifs) {
         if (getline(ifs, str_buffer_))
@@ -132,7 +138,9 @@ bool BufferedFastxReader::LoadBatch(std::istream &ifs, size_t record_count) {
         }
         str_stream_ << str_buffer_ << "\n";
     }
-    
+
+    last_block_size_ = ifs.tellg() - before;
+
     return valid;
 }
 
@@ -219,5 +227,9 @@ bool BufferedFastxReader::ReadNextSequence(std::istream &is, FastxRecord &record
         StripString(record.sequence);
     }
     return true;
+}
+
+size_t BufferedFastxReader::LastBlockSize() {
+    return last_block_size_;
 }
 

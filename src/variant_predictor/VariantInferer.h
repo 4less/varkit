@@ -2,13 +2,14 @@
 // Created by joachim on 15/06/2020.
 //
 
-#ifndef KALAMITY_VARIANTINFERER_H
-#define KALAMITY_VARIANTINFERER_H
+#pragma once
+
 #include "robin_map.h"
 #include <string>
 #include <vector>
 #include <set>
-#include "BHashMap.h"
+#include <Benchmark.h>
+//#include "BHashMap.h"
 
 using namespace std;
 using namespace tsl;
@@ -32,7 +33,7 @@ class VariantInferer {
     uint32_t keyToInt(string key);
 public:
     
-    Benchmark bm = Benchmark("VariantI");
+    ds::Benchmark bm = ds::Benchmark("VariantI");
     
     VariantInferer () {};
     VariantInferer (string db_path, uint32_t read_length);
@@ -50,4 +51,3 @@ public:
 };
 
 
-#endif //KALAMITY_VARIANTINFERER_H

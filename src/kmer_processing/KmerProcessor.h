@@ -4,17 +4,25 @@
 #pragma once
 
 #include <Taxonomy.h>
+#include "BHashMap.h"
 
-class KmerProcessor {
+class KmerProcessor2 {
 public:
     virtual uint64_t operator () (uint8_t * key, uint8_t * value) = 0;
     virtual uint64_t operator () (uint8_t * key, uint64_t &value) = 0;
     virtual uint64_t operator () () = 0;
 };
 
+class KmerProcessorMG2 {
+public:
+    virtual uint64_t operator () (uint8_t * key, uint16_t * value) = 0;
+    virtual uint64_t operator () (uint8_t * key, uint64_t &value) = 0;
+    virtual uint64_t operator () () = 0;
+};
+
 
 template <int KeyBits, int ValueBits, class T>
-class KmerPutter : public KmerProcessor {
+class KmerPutter : public KmerProcessor2 {
 private:
     BHashMap<KeyBits,ValueBits,T>* map_ = nullptr;
     TaxonomyInterface * taxonomy_ = nullptr;

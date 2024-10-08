@@ -324,8 +324,8 @@ provides, and a blurb about how each is intended to be used.
   <DD>Given a source range, a unary predicate and a target value, create a new range where all elements that satisfy the predicate are replaced with the target value.</DD>
 <DT>\link ranges::views::reverse_fn `views::reverse`\endlink</DT>
   <DD>Create a new range that traverses the source range in reverse order.</DD>
-<DT>\link ranges::views::sample_fn `views::sample`\endlink</DT>
-  <DD>Returns a random sample of a range of length `size(range)`.</DD>
+<DT>\link ranges::views::sample_fn `views::m_sample`\endlink</DT>
+  <DD>Returns a random m_sample of a range of length `size(range)`.</DD>
 <DT>\link ranges::views::single_fn `views::single`\endlink</DT>
   <DD>Given a value, create a range with exactly one element.</DD>
 <DT>\link ranges::views::slice_fn `views::slice`\endlink</DT>

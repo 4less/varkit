@@ -18,6 +18,8 @@ enum FileFormat {
     ILLUMINA_1_5,
 };*/
 
+
+
 struct FastxRecord {
     FileFormat format;
     std::string header = "";  // header line, including @/>, but not newline
@@ -31,6 +33,19 @@ private:
     std::string str_representation;
 };
 
+class FastxUtils {
+public:
+    static bool IsValidPair(FastxRecord &a, FastxRecord &b) {
+        if (a.id == b.id) return true;
+        if (a.id.length() != b.id.length()) return false;
+        int i;
+        for (i = 0; i < a.id.length(); i++) {
+            if (a.id[i] != b.id[i]) break;
+        }
+        return i == a.id.length() - 1 && a.id[i] == '1' && b.id[i] == '2';
+    }
+};
+
 class BufferedFastxReader {
 private:
     std::stringstream str_stream_;
@@ -39,6 +54,7 @@ private:
     char* block_buffer_;
     size_t block_buffer_size_;
     bool strip_space_ = true;
+    size_t last_block_size_ = 0;
     
 public:
     BufferedFastxReader();
@@ -57,7 +73,9 @@ public:
     
     static bool ReadNextSequence(std::istream &is, FastxRecord &record,
                                  std::string &str_buffer_ptr, FileFormat format = FORMAT_AUTO_DETECT);
-    
+
+    size_t LastBlockSize();
+
     void auto_detect() { file_format_ = FORMAT_AUTO_DETECT; }
     
     FileFormat file_format() { return file_format_; }

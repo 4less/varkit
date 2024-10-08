@@ -6,12 +6,15 @@
 
 #include <vector>
 #include <fstream>
-#include <c++/7/unordered_map>
-#include <c++/7/bits/locale_facets.tcc>
+//#include <c++/7/unordered_map>
+//#include <c++/7/bits/locale_facets.tcc>
 #include "Utils.h"
 #include "csv.h"
+#include <unordered_set>
+#include <unordered_map>
+#include <queue>
 
-
+using namespace std;
 
 class TaxonomyNode {
 public:
@@ -23,7 +26,7 @@ public:
     std::vector<TaxonomyNode*> children;
     
     void print() {
-        cout << "id:\t" << id << endl;
+        std::cout << "id:\t" << id << endl;
         if (!name.empty())
             cout << "name:\t" << name << endl;
         if (parent) {
@@ -96,7 +99,7 @@ public:
         if (name_map_.find(a) == name_map_.end() || name_map_.find(b) == name_map_.end()) {
             cerr << a << " or " << b << " are unknown taxids in the map at lca(a, b)" << endl;
         }
-    
+
         auto node1 = name_map_.at(a);
         auto node2 = name_map_.at(b);
     
@@ -107,6 +110,21 @@ public:
         while (node2->level > min)
             node2 = node2->parent;
     
+        while (node1 != node2) {
+            node1 = node1->parent;
+            node2 = node2->parent;
+        }
+        return node1->name;
+    }
+
+    std::string lca(TaxonomyNode* node1, TaxonomyNode* node2) {
+        int min = std::min(node1->level, node2->level);
+
+        while (node1->level > min)
+            node1 = node1->parent;
+        while (node2->level > min)
+            node2 = node2->parent;
+
         while (node1 != node2) {
             node1 = node1->parent;
             node2 = node2->parent;
@@ -165,13 +183,12 @@ public:
             
             auto it = row.begin();
             gtdb = (*it).to_string();
-//            cout << "gtdb: " << gtdb << endl;
-//
-//            cout << gtdb.substr(0, 10) << endl;
-//            cout << gtdb.substr(10) << endl;
-//
-            
+
+
             if (gtdb.substr(0, 10).compare("GUT_GENOME") == 0) {
+                id = stoi(gtdb.substr(10));
+            }
+            if (gtdb.substr(0, 10).compare("MGYG-HGUT-") == 0) {
                 id = stoi(gtdb.substr(10));
             }
     
@@ -182,14 +199,21 @@ public:
             lineage = (*(++it)).to_string();
             std::vector<std::string> lineage_v;
             Utils::split(lineage_v, lineage, ";");
+
+
+//            if (strcmp("MGYG-HGUT-04643", gtdb.c_str()) == 0) {
+//                std::cout << "MGYG-HGUT-04643 yes" << std::endl;
+//                std::cout << lineage << std::endl;
+//                exit(0);
+//            }
+
             for (i = 0; i < lineage_v.size(); i++) {
-                string id_string = "";
                 string token = lineage_v[i];
                 if (token.length() == 3) {
-                    if (id_string.empty()) {
-                        id_string = Utils::split(lineage_v[i-1], "__")[1];
-                    }
-                    lineage_v[i] = lineage_v[i] + id_string;
+//                    if (id_string.empty()) {
+//                        id_string = Utils::split(lineage_v[i-1], "__")[1];
+//                    }
+                    lineage_v[i] = lineage_v[i] + gtdb;
                 }
                 
                 node = getOrNew(lineage_v[i]);
@@ -200,15 +224,29 @@ public:
                     parent->children.push_back(node);
                 }
             }
-            node = getOrNew(to_string(id));
-            parent = getOrNew(lineage_v[--i]);
-            node->parent = parent;
-            node->id = id;
-            parent->children.push_back(node);
+            //node = getOrNew(to_string(id));
+            //parent = getOrNew(lineage_v[--i]);
+            //node->parent = parent;
+            //node->id = id;
+            //parent->children.push_back(node);
+            gtdb_map_.insert({gtdb, node});
             map_.insert({id, node});
         }
         
         relevel(name_map_.at("root"));
+
+        std::cout << "size: " << map_.size() << std::endl;
+        std::cout << "size: " << name_map_.size() << std::endl;
+        std::cout << "size: " << gtdb_map_.size() << std::endl;
+    }
+
+    TaxonomyNode* get(std::string name) {
+        if (name_map_.find(name) != name_map_.end()) {
+            return(name_map_.at(name));
+        } else if (gtdb_map_.find(name) != gtdb_map_.end()) {
+            return(gtdb_map_.at(name));
+        }
+        return nullptr;
     }
     
     
@@ -227,15 +265,27 @@ public:
         int lines = 0;
         while (getline(taxa_in, line)) {
             ++lines;
+
             if (line.substr(0, 10).compare("GUT_GENOME") == 0)
                 id = to_string(stoi(line.substr(10,16)));
-            
-            if (name_map_.find(id) != name_map_.end()) {
-                //cout << "push " << id << endl;
-                taxa_set.insert(id);
+            if (line.substr(0, 10).compare("MGYG-HGUT-") == 0)
+                id = to_string(stoi(line.substr(10,16)));
+
+//            if (id[1] != '_') id = "s__" + line;
+
+//            if (name_map_.find(id) != name_map_.end()) {
+            if (gtdb_map_.find(line) != gtdb_map_.end()) {
+                auto name = gtdb_map_.at(line)->name;
+                if (strcmp("s__Collinsella sp002232035", name.c_str()) == 0) {
+                    std::cout << "name: " << name << std::endl;
+                    std::cout << "gtdb: " << line << std::endl;
+                }
+                taxa_set.insert(name);
+//                std::cout << gtdb_map_.at(line)->name << " <- " << line << std::endl;
             } else {
                 cerr << "discard " << line << endl;
             }
+//            std::cout << "lines: " << lines << " taxa: " << taxa_set.size() << std::endl;
         }
         cout << lines << endl;
         taxa_in.close();
@@ -243,21 +293,33 @@ public:
         
         auto orig_set = taxa_set;
         cout << "final set needs to contain at least " << taxa_set.size() << " ids." << endl;
-        
+
+        TaxonomyNode* node1;
+        TaxonomyNode* node2;
+
         std::string root_name = "";
+
+        std::cout << "taxasize: " << taxa_set.size() << std::endl;
         for (auto id : taxa_set) {
+            std::cout << "id: " << id << std::endl;
             if (root_name.empty()) root_name = id;
-            else root_name = lca(root_name, id);
+            else {
+                root_name = lca(name_map_.at(root_name),name_map_.at(id));
+            }
+            if (name_map_.find(id) == name_map_.end()) {
+                std::cout << "sayonara" << std::endl;
+                exit(0);
+            }
         }
         cout << "root: " << root_name << endl;
 
 
-        TaxonomyNode* root = name_map_.at(root_name);
+        TaxonomyNode* root = get(root_name);
         root->parent = nullptr;
 
-        cout << "makesubsetcomplete" << endl;
+        cout << "make subset complete" << endl;
         makeSubsetComplete(taxa_set, root_name);
-        cout << "iscompletecheck" << endl;
+        cout << "is complete check" << endl;
         isSubsetComplete(taxa_set, root_name);
 
 
@@ -276,36 +338,21 @@ public:
         cout << "relevant: " << rel << endl;
         cout << "irrelevant: " << ire << endl;
 
-//        auto children = root->children;
-//        for (auto n : children) {
-//            cout << "cleanup: " << n->name << "    ->    ";
-//            cleanUp(n, taxa_set);
-//        }
-//
-//
-//        cout << "final check" << endl;
-//        for (auto id : orig_set) {
-//            if (taxa_set.find(id) == taxa_set.end()) {
-//                cout << "invalid." << id << endl;
-//                exit(0);
-//            }
-//        }
-//
-//        cout << "Validity check. .";
-//        for (auto t : taxa) {
-//            if (map_.find(t) == map_.end()) {
-//                cout << " . failed for node: " << t << endl;
-//                exit(1);
-//            }
-//        }
-//        cout << " . passed" << endl;
-//
+
         relabel(root);
         relevel(root);
 //
 //
 //
         //custom = true;
+    }
+
+    void relabel() {
+        auto root = name_map_["root"];
+        std::cout << root->name << std::endl;
+
+        relabel(root);
+        relevel(root);
     }
     
     void saveCustomNodes(string path) {
@@ -332,6 +379,30 @@ public:
         }
         out.close();
     }
+
+    void saveCustomNodes2(string path) {
+        std::ofstream out(path);
+
+        //auto err = map_.at(1734091392);
+
+
+        if (!out)
+            cerr << "unable to open outfile " << path << endl;
+
+        auto writer = csv::make_writer(out);
+
+        writer.write_row("taxid","parent_taxid","rank","level");
+        for (auto pair : map_) {
+            auto node = pair.second;
+
+            writer.write_row(
+                    node->id,
+                    (node->parent ? to_string(node->parent->id) : ""),
+                    node->rank,
+                    node->level);
+        }
+        out.close();
+    }
     
     void saveCustomNames(string path) {
         std::ofstream out(path);
@@ -345,6 +416,24 @@ public:
             writer.write_row(
                     pair.first,
                     pair.second->name);
+        }
+        out.close();
+    }
+
+
+    void saveCustomNames2(string path) {
+        std::ofstream out(path);
+        if (!out)
+            cerr << "unable to open outfile " << path << endl;
+
+        auto writer = csv::make_writer(out);
+
+        writer.write_row("taxid","scientific_name","type");
+        for (auto pair : map_) {
+            writer.write_row(
+                    pair.first,
+                    pair.second->name,
+                    "name");
         }
         out.close();
     }
@@ -466,6 +555,7 @@ public:
 
 private:
     std::unordered_map<std::string, TaxonomyNode*> name_map_;
+    std::unordered_map<std::string, TaxonomyNode*> gtdb_map_;
     std::unordered_map<int, TaxonomyNode*> map_;
     std::vector<std::string> names_;
     std::unordered_map<int,std::string> to_gtdb_;
@@ -505,11 +595,11 @@ private:
     void makeSubsetComplete(unordered_set<std::string> &taxa, std::string root_name) {
         cout << "after subset complete" << taxa.size() << endl;
         TaxonomyNode* node;
-        TaxonomyNode* root = name_map_.at(root_name);
+        TaxonomyNode* root = get(root_name);
         taxa.insert(root->name);
         auto copy = taxa;
         for (auto id : copy) {
-            node = name_map_.at(id);
+            node = get(id);
             auto cache = node;
             while (node != root) {
                 taxa.insert(node->name);
@@ -520,15 +610,17 @@ private:
     }
     
     void isSubsetComplete(unordered_set<std::string> &taxa, std::string root_name) {
-        
         TaxonomyNode* node;
-        TaxonomyNode* root = name_map_.at(root_name);
+        TaxonomyNode* root = get(root_name);
         if (taxa.find(root->name) == taxa.end()) {
             cerr << "violation: " << root->name << "(root) missing in set." << endl;
             exit(0);
         }
+        int c = 0;
         for (auto id : taxa) {
-            node = name_map_.at(id);
+            c++;
+            node = get(id);
+            node = name_map_.at(node->name);
             while (node != root) {
                 if (taxa.find(node->name) == taxa.end()) {
                     cerr << "violation: " << node->name << " missing in set." << endl;
@@ -537,6 +629,7 @@ private:
                 node = node->parent;
             }
         }
+        std::cout << "c: " << c << std::endl;
     }
     
     void subsetWorker(TaxonomyNode* node, unordered_set<std::string> &taxa) {
@@ -623,7 +716,7 @@ private:
     void relabel(TaxonomyNode* root) {
         int custom_id = 0;
         int ncbi_id;
-        queue<TaxonomyNode *> q;
+        std::queue<TaxonomyNode*> q;
         q.push(root);
         name_map_.clear();
         map_.clear();
@@ -1328,10 +1421,9 @@ public:
         
         unordered_set<int> taxa_set;
         while (getline(taxa_in, line)) {
+            std::cout << "line: " << line << std::endl;
             if (map_.find(stoi(line)) != map_.end() && std::find(taxa.begin(), taxa.end(), stoi(line)) == taxa.end()) {
-                cout << "push " << line << endl;
                 taxa_set.insert(stoi(line));
-                //taxa.push_back(stoi(line));
             } else {
                 cout << "discard " << line << endl;
             }

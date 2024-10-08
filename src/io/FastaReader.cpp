@@ -4,9 +4,10 @@
 
 #include <cstring>
 #include "FastaReader.h"
-#include <filesystem>
+#include <experimental/filesystem>
 
-FastaReader::FastaReader(string file, int buffer_size) : file_ (std::move(file)), buffer_size_(buffer_size), file_size_(std::filesystem::file_size(file_)) {
+
+FastaReader::FastaReader(string file, int buffer_size) : file_ (std::move(file)), buffer_size_(buffer_size), file_size_(std::experimental::filesystem::file_size(file_)) {
     sequence_buffer_ = new char[buffer_size_];
     inFile.rdbuf()->pubsetbuf(sequence_buffer_, buffer_size_);
     
@@ -53,7 +54,7 @@ uintmax_t FastaReader::getProcessedBytes() {
 }
 
 uintmax_t FastaReader::getFileSize() {
-    return filesystem::file_size(file_);
+    return std::experimental::filesystem::file_size(file_);
 }
 
 

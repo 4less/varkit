@@ -52,7 +52,7 @@ void VariantInferer::loadDB(string db_path) {
     size_t del_pos;
     string line;
     
-    cout << "load db" << endl;
+    cout << "load db: " << db_path << endl;
     
     // read db file
     ifstream db_in;
@@ -129,11 +129,15 @@ vector<uint32_t> VariantInferer::split(const string &s) {
     int pos = 0;
     
     while ((pos = line.find(",", lastpos)) != string::npos) {
+        std::cout << "stoi incoming..." << std::endl;
         token = stoi(line.substr(lastpos, pos-lastpos));
+        std::cout << "after stoi..." << std::endl;
         values.push_back(token);
         lastpos = pos+1;
     }
+    std::cout << "stoi incoming...2" << std::endl;
     token = stoi(line.substr(lastpos, line.length()-lastpos));
+    std::cout << "after stoi...2" << std::endl;
     values.push_back(token);
     return values;
 }

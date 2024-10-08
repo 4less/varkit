@@ -145,11 +145,12 @@ public:
             memcpy(key, key_rc_, key_bytes_);
         pos_++;
     }
-    
+
     uint32_t getPos() {
         return pos_-1;
     }
 };
+
 
 
 #endif //KALAMITY_SPACEDKMERITERATOR_H

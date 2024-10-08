@@ -4,7 +4,7 @@
 #pragma once
 
 #include "KmerBuffer.h"
-#include <zstd.h>
+//#include <zstd.h>
 #include "zstr.hpp"
 #include "strict_fstream.hpp"
 #include <zlib.h>

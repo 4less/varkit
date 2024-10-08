@@ -1,10 +1,11 @@
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "openmp-use-default-none"
+//#pragma clang diagnostic push
+//#pragma ide diagnostic ignored "openmp-use-default-none"
 //
 // Created by joachim on 01/07/2020.
 //
 
 #pragma once
+
 
 #include <iostream>
 #include <FastaReader.h>
@@ -172,10 +173,11 @@ namespace VarkitExecutor {
         
         cout << "Validation process finished. All k-mers were found." << endl;
     }
+
     
     template<int KeyBits, int ValueBits, class T>
     static void runBuildWorker(BuildOptionsContainer &options) {
-        Benchmark build_bm("Build process");
+        ds::Benchmark build_bm("Build process");
         build_bm.start();
         
         // Shape information
@@ -298,7 +300,10 @@ namespace VarkitExecutor {
                         value = stoll(record.header.substr(1));
                         
 //                        tax_id = options.taxonomy.compare("GTDB") == 0 ? taxonomy->getCustom(value) : taxonomy->getCustom(record.header.substr(1));
-                        tax_id = taxonomy->getCustom(value);
+
+                        // depends on header prep of references.
+                        //tax_id = taxonomy->getCustom(value);
+                        tax_id = value;
                         if (tax_id == -1) {
                             cerr << "unknown taxid: " << tax_id << " for value " << value << endl;
                             exit(0);
@@ -379,7 +384,7 @@ namespace VarkitExecutor {
             runBuildWorker<44, 20, CustomHash>(options);
         }
     }
-    
+
     
     template<int KeyBits, int ValueBits, class T>
     static void runClassifyThreadWorker(BHashMap<KeyBits, ValueBits, T> &map, FastaReader &reader, ClassifyOptionsContainer &options) {
@@ -400,7 +405,7 @@ namespace VarkitExecutor {
     template<int KeyBits, int ValueBits, class T>
     static void runClassifyWorkerOMP(ClassifyOptionsContainer &options, BHashMap<KeyBits, ValueBits, T> &map, std::string file) {
         cout << " start classify" << endl;
-        Benchmark classify_bm("Classify process");
+        ds::Benchmark classify_bm("Classify process");
         classify_bm.start();
         
         // Shape information
@@ -633,7 +638,7 @@ namespace VarkitExecutor {
 //                    cin >> stop;
 
                     if (keep) {
-                        std::string ratio = Utils::to_string_precision((double)hit_count/read_kmer_count, 3);
+                        std::string ratio = Utils::to_string_precision((double)hit_count / read_kmer_count, 3);
 #pragma omp critical(output_classified)
                         {
                             classified++;
@@ -732,7 +737,210 @@ namespace VarkitExecutor {
                 t.join();
         }
     }
-    
+
+
+    static void runBuildMarkerGenes(BuildOptionsContainer &options) {
+
+    }
+
+    template<int KeyBits, int ValueBits, class T>
+    static void runBuildMarkerGenesWorkerOMP(BuildOptionsContainer &options) {
+        ds::Benchmark build_bm("Build process");
+        build_bm.start();
+
+        // Shape information
+        cout << "shape_path: " << options.db + MetaDataDB::SHAPE_FILE << endl;
+        string shape_str = MetaDataDB::loadShape(options.db + MetaDataDB::SHAPE_FILE);
+        const size_t shape_length = shape_str.length();
+        bool * shape = getShape(shape_str);
+
+        const int k = KeyBits/2;
+        const int key_bytes = (2*k + 8 - 1) /  8;
+        const int value_bytes = (ValueBits + 8 - 1) /  8;
+
+        static size_t block_size = 200000;
+
+        // Load Taxonomy
+        TaxonomyInterface *taxonomy;
+        if (options.taxonomy.compare("NCBI") == 0) {
+            taxonomy = new NCBITaxonomy();
+            taxonomy->loadCustomNodes(options.db + MetaDataDB::TAX_NODES_FILE);
+            taxonomy->loadCustomNames(options.db + MetaDataDB::TAX_NAMES_FILE);
+        } else if (options.taxonomy.compare("GTDB") == 0) {
+            taxonomy = new GTDBTaxonomy();
+            taxonomy->loadCustomNodes(options.db + MetaDataDB::TAX_NODES_FILE);
+            taxonomy->loadCustomNames(options.db + MetaDataDB::TAX_NAMES_FILE);
+        } else {
+            std::cerr << options.taxonomy << " is no valid taxonomy. Valid taxonomies are NCBI and GTDB." << endl;
+            exit(0);
+        }
+
+        // Initialize Map
+        cout << "init capa: " << options.initial_capacity << endl;
+        BHashMap<KeyBits,ValueBits,T> map( options.initial_capacity , 0.8 , 1.5);
+        cout << "Initial size in MB: " << map.getMemoryInMB() << endl;
+        cout << "files: " << options.reference.size() << endl;
+        cout << "shape: " << shape_str << endl;
+        cout << "shape_length: " << shape_length << endl;
+
+        // Input stream
+        std::istream* is = nullptr;
+        // FIX set IS BEFORE PARALLEL
+        is = new std::ifstream(options.reference[0]);
+        if (!is) {
+            cerr << "There is no such file: " << options.reference[0] << endl;
+            exit(0);
+        }
+
+        //stats
+        int record_count = 0;
+        int skipped_count = 0;
+
+
+        std::cout << "Number of threads: " << omp_get_thread_num() << std::endl;
+        static int num_threads = 2;
+        omp_set_num_threads(num_threads);
+
+        uint8_t* key_temp = nullptr;
+        uint8_t* value_temp = nullptr;
+
+        //Multithreading
+#pragma omp parallel
+        {
+#pragma omp critical(print_thread_start)
+            std::cout << "start: " << omp_get_thread_num() << std::endl;
+
+            BufferedFastxReader reader = BufferedFastxReader();
+            FastxRecord record = FastxRecord();
+
+            static thread_local uint8_t *key = new uint8_t[key_bytes];
+            static thread_local uint8_t *key_rc = new uint8_t[key_bytes];
+            static thread_local uint64_t value = 1;
+            static thread_local uint64_t tax_id = 0;
+
+            memset(key, 0, key_bytes);
+            memset(key_rc, 0, key_bytes);
+
+            // Iterator and putter
+            static thread_local SpacedKmerIterator iterator(k, shape, shape_length);
+            static thread_local KmerPutter<KeyBits, ValueBits, T> putter = KmerPutter<KeyBits, ValueBits, T>();
+
+            // Initialize Putter
+            putter.setMap(&map);
+            putter.setTaxonomy(taxonomy);
+
+            //Init KmerBuffer
+            //KmerBuffer buffer(3125000, key_bytes, value_bytes);
+
+            // stats
+            uint64_t kmer_count = 0;
+            uint64_t rand_calc = 0;
+
+            // Iterate over all input files
+            for (const auto &file : options.reference) {
+
+                // Outer loop to load data in blocks (blocksize specified in number of records)
+                while (true) {
+                    bool ok = false;
+
+#pragma omp critical(reader)
+                    ok = reader.LoadBlock(*is, block_size);
+                    if (!ok) break;
+
+                    // Read records from datablock
+                    while (true) {
+                        auto valid_fragment = reader.NextSequence(record);
+                        if (!valid_fragment) break;
+                        iterator.setRecord(record);
+                        cerr << record.sequence.length() << endl;
+
+                        // count processed records
+                        if ((record_count % 10) == 0)
+                            cout << "processed record: " << record_count << "(of which " << skipped_count
+                                 << " were skipped)" << endl;
+
+                        #pragma omp atomic update
+                        ++record_count;
+
+                        // Extract taxonomic identifier from sequence header (has to be a ncbi identifier e.g.: >813)
+                        value = stoll(record.header.substr(1));
+
+//                        tax_id = options.taxonomy.compare("GTDB") == 0 ? taxonomy->getCustom(value) : taxonomy->getCustom(record.header.substr(1));
+
+                        // depends on header prep of references.
+                        //tax_id = taxonomy->getCustom(value);
+                        tax_id = value;
+                        if (tax_id == -1) {
+                            cerr << "unknown taxid: " << tax_id << " for value " << value << endl;
+                            exit(0);
+                            continue;
+                        }
+
+                        // Skip if ncbi id is unknown to local taxonomy subset
+                        if (!taxonomy->getNode(tax_id)) {
+                            cerr << "local taxonomy subset has no node (entry) for NCBI identifier: " << tax_id << endl;
+                            cerr << "Skip read (please refer to the option -w/--write_unknown to extract skipped reads)." << endl;
+                            skipped_count++;
+                            exit(0);
+                            continue;
+                        }
+
+                        // Iterate over all k-mers
+                        while (iterator.hasNext()) {
+                            // Extract key from k-mer
+                            iterator.operator()(key);
+                            kmer_count++;
+
+                            //buffer.pushKV(key, ((uint8_t*)&value));
+
+                            //#pragma omp critical(putter)
+                            putter.operator()(key, tax_id);
+
+                            if (!map.search(key)) {
+                                cout << "fail with: " << endl;
+                                cout << record.to_string() << endl;
+                                exit(0);
+                            }
+                        }
+                    }
+//                    while (buffer.next()) {
+//                        //(key_temp = buffer.popKey();
+//                        //rand_calc += (int) key_temp[0] + (int) key_temp[1] + (int) key_temp[2];
+//                        #pragma omp critical(putter)
+//                        putter.operator()(buffer.popKey(), tax_id);
+//                    }
+//                    buffer.reset();
+                }
+                cout << "kmercount: " << kmer_count << endl;
+                cout << "randcalc: " << rand_calc << endl;
+                break; //FIX CODE
+            }
+
+            delete[] key;
+            delete[] key_rc;
+        }
+
+        build_bm.stop();
+        build_bm.printResults();
+
+        // exclude while testing key extracting methods etc.
+        map.printVars();
+        map.printStats();
+        cout << "save db to " << (options.db + "/index.db") << endl;
+        map.save(options.db + "/index");
+        cout << "done saving." << endl;
+
+        delete is;
+        delete[] shape;
+        delete taxonomy;
+
+        cout << "validate: " << options.validate << endl;
+        if (options.validate) {
+            cout << "validate" << endl;
+            runVerify(map, options);
+        }
+    }
+
     static void runClassify(ClassifyOptionsContainer &options) {
         
         if (options.meta_db.key_bits == 44 && options.meta_db.value_bits == 20)
